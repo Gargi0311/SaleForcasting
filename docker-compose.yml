@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      # Override these as needed — all values below are the built-in defaults
+      # SF_DATA_DIR: /app/backend/data
+      # SF_MODEL_DIR: /app/backend/models
+      # SF_FRONTEND_DIST: /app/frontend/out
+      - SF_CORS_ORIGINS=http://localhost:8000
+    volumes:
+      # Persist uploaded datasets and trained models across restarts
+      - sf-data:/app/backend/data/uploads
+      - sf-models:/app/backend/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+volumes:
+  sf-data:
+  sf-models:
