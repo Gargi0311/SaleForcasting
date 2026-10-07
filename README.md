@@ -1,141 +1,393 @@
-# Sales Forecasting
+# SalesCast
 
-A full-stack sales analytics and demand-forecasting app built on the Superstore dataset. It turns the analysis in `minor project (1).ipynb` and the `sales forecasting.pbix` Power BI report into a web dashboard you can run locally.
+SalesCast is a full-stack sales forecasting and analytics platform. A FastAPI backend ingests transactional sales data, trains and serves a forecasting model, and exposes analytics through a documented REST API. A Next.js frontend presents the results as an interactive dashboard. The system can be run as two separate development servers, or packaged as a single deployable unit in which FastAPI serves the statically exported frontend.
 
-- **Backend:** FastAPI + pandas + scikit-learn. It runs the notebook's feature engineering and its Ridge + Gradient Boosting ensemble, and serves analytics, forecasts and inventory plans over a REST API.
-- **Frontend:** Next.js 16 (App Router) + TypeScript + Recharts, set in Space Grotesk on a near-black and green palette.
-  - **Landing page (`/`):** an animated before/after demo that shows a live forecast from the API, live stats and a feature overview.
-  - **Dashboard (`/dashboard/*`):** interactive versions of the three Power BI pages, plus Forecast, Inventory and Data pages.
-  - **Dashboard extras:** a collapsible sidebar, a ⌘K command palette, keyboard shortcuts, KPI cards with year-over-year deltas and sparklines, auto-generated insights, a dark/light/system theme toggle and Lenis smooth scrolling.
+---
 
-## Pages
+## Table of Contents
 
-| Page | What it shows | Source |
-|------|---------------|--------|
-| **Landing** (`/`) | Hero with a before/after toggle (scattered spreadsheets vs. a live forecast card), live dataset stats, features, how it works | New |
-| **Overview** | KPI cards with YoY change and sparklines, revenue/profit/units trend, key insights, category, region share, top products. Filters for date, region, category and segment. | Power BI page 1 |
-| **Insights** | Sub-category treemap, sales vs profit by product, sales by state (tile map), segment donut, orders by ship mode, demand variability, product table | Power BI page 2 + notebook EDA |
-| **Forecast** | 3/6/12-month recursive forecast per product and region, with an approximate 80% interval and expected revenue. CSV export. | New |
-| **Inventory** | Safety stock and reorder point per product/region, with adjustable service level and lead time | Notebook's safety-stock idea |
-| **Model** | R², MAE, RMSE, MAPE, CV scores, actual vs predicted, prediction error, error distribution, feature importance, holdout table, retrain button | Power BI page 3 |
-| **Data** | Upload your own `.xlsx`/`.csv` (the model retrains automatically), restore sample data, preview | New |
+1. [Overview](#1-overview)
+2. [Key Features](#2-key-features)
+3. [Architecture](#3-architecture)
+4. [Technology Stack](#4-technology-stack)
+5. [Prerequisites](#5-prerequisites)
+6. [Quick Start](#6-quick-start)
+7. [Deployment Modes](#7-deployment-modes)
+8. [Configuration](#8-configuration)
+9. [API Reference](#9-api-reference)
+10. [Forecasting Model](#10-forecasting-model)
+11. [Data Requirements](#11-data-requirements)
+12. [Testing](#12-testing)
+13. [Project Structure](#13-project-structure)
+14. [Version Control Guidance](#14-version-control-guidance)
+15. [Troubleshooting](#15-troubleshooting)
+16. [Reference Materials](#16-reference-materials)
+17. [Authors and Team](#17-authors-and-team)
 
-## Quick start
+---
 
-Requirements: Python 3.10+ and Node 20+.
+## 1. Overview
 
-### 1. Backend
+SalesCast turns historical sales records into actionable insight. It answers three questions:
+
+- What has happened? Aggregated analytics over the loaded dataset.
+- What is likely to happen? Forward-looking sales forecasts produced by a trained model.
+- How reliable is the forecast? A transparent evaluation view that compares predicted and actual values month by month.
+
+The application ships with a generated sample dataset in the style of the well-known Superstore retail dataset, so it is fully functional immediately after installation, without any external data source. Users may also upload their own data, provided it conforms to the schema described in [Data Requirements](#11-data-requirements).
+
+## 2. Key Features
+
+- **Interactive dashboard.** Multiple dashboard pages built with Recharts, with light and dark themes and smooth scrolling.
+- **Forecasting.** A persisted machine learning model that is trained automatically on first start and reloaded on subsequent starts.
+- **Model evaluation.** A dedicated evaluation view that reports model quality, including month-by-month comparison of actual and predicted values.
+- **Data upload.** Users can supply their own dataset; uploads are stored separately from the bundled sample data.
+- **Self-bootstrapping data.** If the sample dataset is absent, the backend generates it on demand using the bundled generator script.
+- **Self-documenting API.** Interactive Swagger documentation and an OpenAPI schema are served by the backend.
+- **Two run modes.** A hot-reloading development setup, and a single-process production setup in which one server delivers both the API and the user interface.
+- **Containerised deployment.** A multi-stage Dockerfile and a Compose definition with persistent volumes.
+- **Automated tests.** A pytest suite covering the API.
+
+## 3. Architecture
+
+SalesCast is organised as two cooperating applications.
+
+```
++---------------------+        HTTP / JSON         +-------------------------+
+|  Next.js frontend   |  <---------------------->  |  FastAPI backend        |
+|  (TypeScript,       |        /api/*              |  (Python)               |
+|   Recharts)         |                            |                         |
++---------------------+                            |  analytics  ml  data    |
+                                                   |        state            |
+                                                   +-----------+-------------+
+                                                               |
+                                              +----------------+---------------+
+                                              |                                |
+                                    backend/data/ (CSV, uploads)     backend/models/ (joblib)
+```
+
+**Backend.** The FastAPI application is organised into focused modules: configuration (`config`), data loading and validation (`data`), analytics computation (`analytics`), model training and inference (`ml`), and shared application state (`state`). On startup, the application state resolves the dataset (generating the sample data if needed), then loads the persisted model or trains a new one.
+
+**Frontend.** The Next.js application uses the App Router. All backend access is centralised in a single typed client (`src/lib/api.ts`), and the API response shapes are mirrored as TypeScript interfaces.
+
+**Development versus production.** The behaviour of the frontend differs by mode, as defined in `next.config.ts`:
+
+| Mode | Frontend behaviour |
+|---|---|
+| Development | The Next.js dev server proxies `/api/*`, `/docs` and `/openapi.json` to the FastAPI backend, which avoids cross-origin configuration during development. |
+| Production | The frontend is built as a static export (`output: "export"`) into `frontend/out/`, which FastAPI serves directly. No Node.js runtime is required in production. |
+
+## 4. Technology Stack
+
+| Layer | Technologies |
+|---|---|
+| Backend | Python 3.12, FastAPI, Uvicorn, pandas, NumPy, joblib |
+| Frontend | Next.js (App Router), React, TypeScript, Recharts, next-themes, Lenis |
+| Testing | pytest |
+| Packaging | Docker (multi-stage build), Docker Compose |
+
+## 5. Prerequisites
+
+For local development:
+
+- Python 3.12 or later
+- Node.js 22 or later, with npm
+- Git
+
+For containerised deployment:
+
+- Docker, and optionally Docker Compose
+
+## 6. Quick Start
+
+### 6.1 Clone the repository
+
+```bash
+git clone <repository-url>
+cd <repository-directory>
+```
+
+### 6.2 Start the backend
 
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
-pip install -r requirements-dev.txt
-uvicorn app.main:app --reload
+
+# macOS / Linux
+source .venv/bin/activate
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 ```
 
-On first start the API trains the model (a few seconds) and caches it in `backend/models/`. API docs: http://localhost:8000/docs
+On first start, the backend will:
 
-### 2. Frontend (dev mode)
+1. Generate the sample dataset if it is not already present.
+2. Train the forecasting model and persist it to the model directory.
+
+This initial step takes a few seconds. Subsequent starts reuse the persisted model and are considerably faster.
+
+The backend is now available at `http://127.0.0.1:8000`, with interactive API documentation at `http://127.0.0.1:8000/docs`.
+
+### 6.3 Start the frontend
+
+In a second terminal:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-Open http://localhost:3000 for the landing page and http://localhost:3000/dashboard for the app. In dev mode, Next.js proxies `/api` and `/docs` to the backend on port 8000 (override with `API_URL`).
+The dashboard is now available at `http://localhost:3000`. Requests to `/api/*` are proxied to the backend automatically.
 
-### Single-server mode
+## 7. Deployment Modes
 
-`npm run build` writes a static export to `frontend/out/`. FastAPI then serves it at http://localhost:8000:
+### 7.1 Single-server mode (static export)
+
+In this mode, FastAPI serves both the API and the compiled user interface from one process on one port.
 
 ```bash
-cd frontend && npm run build
+# 1. Build the static frontend into frontend/out/
+cd frontend
+npm ci
+npm run build
+
+# 2. Start the backend, pointing it at the build output
+cd ../backend
+export SF_FRONTEND_DIST=../frontend/out        # Windows PowerShell: $env:SF_FRONTEND_DIST = "../frontend/out"
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-To host the frontend on its own (Vercel, Netlify, S3), set `NEXT_PUBLIC_API_URL` to the backend's URL at build time, and add the frontend's origin to `SF_CORS_ORIGINS` on the backend.
+The complete application is then available at `http://localhost:8000`.
 
-### Keyboard shortcuts (dashboard)
+### 7.2 Docker
 
-| Keys | Action |
-|------|--------|
-| `Ctrl/⌘ K` | Command palette (navigate, retrain, switch theme, open API docs) |
-| `g` then `o` / `i` / `f` / `v` / `m` / `d` | Go to Overview / Insights / Forecast / Inventory / Model / Data |
-| `[` | Collapse or expand the sidebar |
+The provided Dockerfile is a multi-stage build. The first stage uses a Node.js image to produce the static frontend; the final stage uses a slim Python image that contains only the backend and the built frontend. Node.js is not present in the final image.
 
-### Docker
+```bash
+docker build -t salescast .
+docker run --rm -p 8000:8000 salescast
+```
+
+### 7.3 Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-Then open http://localhost:8000.
+The Compose definition publishes port 8000 and mounts two named volumes so that state survives container restarts:
 
-## Data
+| Volume | Container path | Purpose |
+|---|---|---|
+| `sf-data` | `/app/backend/data/uploads` | Datasets uploaded by users |
+| `sf-models` | `/app/backend/models` | The trained, persisted model |
 
-The original `superstore_dataset.xlsx` used in the notebook isn't in this repo. So the app ships with **synthetic sample data** in the same 17-column schema: `backend/data/superstore_dataset.csv`, 9,000 orders, 2021–2023, made by `backend/scripts/generate_sample_data.py`.
+To remove the containers while retaining the volumes, run `docker compose down`. To remove the volumes as well and force a clean retrain, run `docker compose down -v`.
 
-To use the real data, upload the Excel file on the **Data** page. It's validated, saved to `backend/data/uploads/`, and the model is retrained right away. Required columns are `Order ID, Order Date, Region, Category, Sub-Category, Product ID, Product Name, Sales, Quantity, Profit`. Optional columns (`Ship Date, Ship Mode, Segment, State, Discount, Unit Price, Lead Time (Days)`) are derived or defaulted when missing.
+Note that the sample dataset is not baked into the image. On the first container start, the backend generates it and trains the model, so the first start is slower than subsequent ones.
 
-## Model
+## 8. Configuration
 
-`backend/app/ml.py` follows the notebook:
+All configuration is supplied through environment variables. Every variable has a sensible default, so none is required for local development.
 
-1. Aggregate orders to product × region × month.
-2. Features: lags 1/2/3/6/12, rolling mean/std over 3/6/12 months, calendar flags (Q4, summer), category codes, average lead time, discount and unit price.
-3. Ensemble `0.55 × Ridge(α=10, scaled) + 0.45 × GradientBoosting(300 trees, depth 2)`, clipped at 0.
-4. Evaluate on the last 12 months (2023 in the sample data), with 3-fold `TimeSeriesSplit` CV.
-5. Refit on all data and forecast recursively month by month.
+| Variable | Component | Default | Description |
+|---|---|---|---|
+| `SF_DATA_DIR` | Backend | `backend/data/` | Directory containing the sample dataset and the `uploads/` subdirectory. Override this to relocate data, for example onto a mounted volume. |
+| `SF_MODEL_DIR` | Backend | `backend/models/` | Directory in which the trained model is persisted. |
+| `SF_FRONTEND_DIST` | Backend | `frontend/out/` | Location of the static frontend build to be served by FastAPI. In the Docker image this is set to `/app/frontend/out`. |
+| `SF_CORS_ORIGINS` | Backend | `http://localhost:3000` | Allowed cross-origin request origins. Set this when the frontend is hosted on a different origin from the API. |
+| `API_URL` | Frontend (dev server) | `http://127.0.0.1:8000` | Backend address to which the Next.js development server proxies API requests. |
+| `NEXT_PUBLIC_API_URL` | Frontend (build time) | empty (relative URLs) | Absolute API base URL embedded at build time. Leave empty when the API and UI share an origin. |
 
-A few changes were needed to make the notebook's model usable for real forecasts:
+A suggested `.env.example` for local configuration:
 
-- **Lags per product *and* region.** The notebook grouped by `Product ID` only, so `lag_1` was often a different region's value for the same month.
-- **Dropped `Num_Orders`.** It's the order count for the same month, so it's unknown when forecasting the future (target leakage).
-- **Gap months filled with 0** so lags are true calendar lags.
-- **Chronological CV.** The CV ran on product-sorted rows, so its folds weren't time-ordered.
-- **Safety stock / reorder point in consistent units.** `SS = z·σ_daily·√L` and `ROP = daily_demand·L + SS`. The notebook mixed monthly σ with daily lead time, multiplied demand by unit price, and overwrote the 95% z (1.645) with 2.326.
+```bash
+# Backend
+SF_DATA_DIR=backend/data
+SF_MODEL_DIR=backend/models
+SF_FRONTEND_DIST=frontend/out
+SF_CORS_ORIGINS=http://localhost:3000
 
-Without the leaky feature, scores are lower but honest. Accuracy on your real data will differ from the synthetic sample.
+# Frontend
+# API_URL=http://127.0.0.1:8000
+# NEXT_PUBLIC_API_URL=https://your-api.example.com
+```
 
-## API
+`NEXT_PUBLIC_API_URL` is read at build time and compiled into the static export. Changing it requires rebuilding the frontend.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/filters` | Filter options + date bounds |
-| GET | `/api/overview` | KPIs, trend, category/region/product breakdowns |
-| GET | `/api/insights` | Sub-category, state, segment, ship mode, product stats |
-| GET | `/api/model` | Metrics, feature importance |
-| GET | `/api/model/evaluation` | Holdout actual vs predicted (`product`, `region`) |
-| POST | `/api/model/retrain` | Retrain on the active dataset |
-| GET | `/api/forecast` | `horizon` (1–24), `product`, `region` |
-| GET | `/api/inventory` | `service_level`, `lead_time`, `product`, `region` |
-| GET | `/api/dataset` | Active dataset info + preview |
-| POST | `/api/dataset/upload` | Upload `.csv`/`.xlsx` (multipart `file`) |
-| POST | `/api/dataset/reset` | Return to the sample dataset |
+## 9. API Reference
 
-`/api/overview` and `/api/insights` accept `start`, `end` (YYYY-MM-DD) and repeatable `region`, `category`, `segment`.
+The backend exposes a REST API under the `/api` prefix. The authoritative, always-current reference is generated from the code and served by the application itself:
 
-## Tests
+| Resource | URL |
+|---|---|
+| Interactive documentation (Swagger UI) | `/docs` |
+| OpenAPI schema (machine-readable) | `/openapi.json` |
+| Health check | `/api/health` |
+
+The health endpoint returns a successful response once the application has started and is suitable for use as a container or load balancer health probe. The API covers dataset summary and analytics, forecasting, model evaluation, and data upload. Because the documentation is generated directly from the route definitions, it cannot drift out of date with the implementation.
+
+In development, the Swagger interface is reachable through the frontend origin (`http://localhost:3000/docs`) as well as directly on the backend, because the development server proxies it.
+
+## 10. Forecasting Model
+
+**Lifecycle.** The model is trained on first start and persisted to `SF_MODEL_DIR` as `model.joblib`. On later starts the persisted file is loaded rather than retrained. To force retraining, delete the model file (or the model volume under Docker) and restart the application.
+
+**Evaluation.** The evaluation view reports model quality and a month-by-month comparison of actual and predicted values, allowing a reader to see precisely where the model performs well and where it does not.
+
+**Design decisions and limitations.** Users should interpret forecasts with the following in mind:
+
+- Forecast accuracy depends directly on the quantity, regularity and quality of the training data. The bundled sample dataset is synthetic and is intended to demonstrate the system, not to represent any real business.
+- Forecasts are statistical estimates, not guarantees. They do not account for events absent from the training history, such as promotions, supply disruptions or market shocks.
+- The model should be evaluated on the organisation's own data before any forecast is used to inform a business decision.
+
+## 11. Data Requirements
+
+The application accepts tabular sales data in CSV format. The dataset must contain the required columns and may contain a number of optional columns that enable additional analytics. Uploaded files are validated on receipt, and the API returns a descriptive error when a required column is missing. The authoritative column definitions are published in the OpenAPI documentation at `/docs` for the upload endpoint.
+
+Uploaded datasets are stored in `backend/data/uploads/` (or the `uploads/` directory beneath `SF_DATA_DIR`), which is intentionally separate from the bundled sample data.
+
+## 12. Testing
+
+The backend test suite uses pytest and exercises the API through a test client.
 
 ```bash
 cd backend
+pip install pytest
 pytest
 ```
 
-## Project layout
+The tests should be run from the `backend` directory so that the `app` package resolves correctly.
+
+## 13. Project Structure
 
 ```
-backend/
-  app/            FastAPI app: main.py (routes), ml.py, analytics.py, data.py, state.py
-  scripts/        sample-data generator
-  data/           sample dataset (+ uploads/)
-  tests/
-frontend/
-  src/app/            / (landing) and /dashboard/{insights,forecast,inventory,model,data}
-  src/components/     shell, command palette, providers (theme + Lenis), filter bar, tables, tile map, UI kit
-  src/components/landing/  before/after demo, typewriter, scroll reveal, live stats
-  src/lib/            API client, formatting, chart theme
-minor project (1).ipynb   original analysis notebook
-sales forecasting.pbix    original Power BI report
+.
+|-- backend/
+|   |-- app/
+|   |   |-- main.py              Application entry point and route registration
+|   |   |-- config.py            Environment-driven configuration
+|   |   |-- data.py              Dataset loading and validation
+|   |   |-- analytics.py         Aggregations and analytical computations
+|   |   |-- ml.py                Model training, persistence and inference
+|   |   `-- state.py             Startup logic and shared application state
+|   |-- scripts/
+|   |   `-- generate_sample_data.py   Sample dataset generator
+|   |-- tests/
+|   |   `-- test_api.py          API test suite
+|   |-- data/
+|   |   `-- uploads/             User-uploaded datasets (runtime)
+|   `-- models/                  Persisted model (runtime, generated)
+|-- frontend/
+|   |-- src/
+|   |   |-- app/                 Pages, layout and global styles (App Router)
+|   |   |-- components/          Reusable UI components
+|   |   `-- lib/api.ts           Typed API client
+|   |-- public/                  Static assets
+|   |-- next.config.ts           Dev proxy and static export configuration
+|   `-- package.json
+|-- Dockerfile                   Multi-stage production image
+|-- docker-compose.yml           Single-service Compose definition with volumes
+`-- README.md
 ```
+
+The exact module layout within `backend/app/` may evolve; the names above reflect the current organisation of responsibilities.
+
+## 14. Version Control Guidance
+
+Several files are produced at runtime or are large binaries, and should not be committed. The following entries are recommended in the root `.gitignore`:
+
+```gitignore
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Generated artifacts
+backend/models/
+backend/data/uploads/
+backend/data/superstore_dataset.csv
+*.joblib
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Reference artifacts (large binaries)
+*.pbix
+*.ipynb
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+```
+
+The sample dataset is excluded because it is regenerated on demand by `backend/scripts/generate_sample_data.py`, which is the single source of truth. If the original notebook or Power BI report should be retained in the repository, track them with Git LFS instead of ignoring them.
+
+## 15. Troubleshooting
+
+| Symptom | Likely cause | Resolution |
+|---|---|---|
+| Slow first request or first start | The sample data is being generated and the model trained. | Wait a few seconds. This occurs only once per fresh data and model directory. |
+| Browser reports a CORS error | The frontend origin is not in the allowed list. | Set `SF_CORS_ORIGINS` to include the frontend origin and restart the backend. |
+| Frontend shows no data in development | The backend is not running, or `API_URL` is wrong. | Confirm the backend responds at `/api/health` and that `API_URL` matches its address. |
+| Production build serves an API-only application | `SF_FRONTEND_DIST` does not point to a built `out/` directory. | Run `npm run build` in `frontend/` and set `SF_FRONTEND_DIST` to the resulting directory. |
+| `npm ci` fails during local or Docker build | `package-lock.json` is missing or out of sync with `package.json`. | Run `npm install` locally to regenerate the lock file, commit it, and rebuild. Also confirm that every dependency version in `package.json` is a published release. |
+| Stale predictions after changing data | The persisted model was trained on the previous data. | Delete `model.joblib` (or the model volume) and restart to retrain. |
+| `ModuleNotFoundError` when running tests | Tests were launched from the wrong directory. | Run `pytest` from the `backend` directory. |
+
+## 16. Reference Materials
+
+The repository root contains the original analysis that preceded the application: a Jupyter notebook documenting the initial exploration and modelling work, and a Power BI report presenting the same data. They are retained for reference only and are not required to build, run or deploy the application. Both are excluded from the Docker image.
+
+---
+
+## 17. Authors and Team
+
+SalesCast was developed collaboratively. The author who maintains this repository is introduced first, followed by the team members who contributed to the project.
+
+### Author
+
+**William Law II**
+Software Engineer | Frontend Engineer and Designer
+
+William Law II is a software engineer whose work spans product development, interface design and design engineering. His projects combine full-stack web development with data and machine learning, and include analytics platforms, fraud detection systems and backend services.
+
+| Resource | Link |
+|---|---|
+| Portfolio | [willx.tech](https://willx.tech) |
+| Projects and writing | [willx.tech/BlogsandProject](https://willx.tech/BlogsandProject) |
+| GitHub | [github.com/SheerWill07](https://github.com/SheerWill07) |
+| Medium | [medium.com/@williamtecumsehsherman007](https://medium.com/@williamtecumsehsherman007) |
+| Email | [williambenjaminlaw007@gmail.com](mailto:williambenjaminlaw007@gmail.com) |
+
+For questions, feedback or collaboration enquiries regarding this project, please contact the author by email or through the portfolio website.
+
+### Team Members
+
+The following individuals contributed to the design, development and delivery of SalesCast.
+
+| Name | GitHub |
+|---|---|
+| Aditya | [github.com/Aditya43Ux](https://github.com/Aditya43Ux) |
+| Gargi | [github.com/Gargi0311](https://github.com/Gargi0311) |
+| Aakash | [github.com/Aakash00017](https://github.com/Aakash00017) |
+
+Suggestions, issue reports and contributions from the wider community are welcome through the project repository.
+
+---
+
+Copyright 2026 William Law II and the SalesCast team. All rights reserved.
